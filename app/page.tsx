@@ -118,7 +118,7 @@ export default function HomePage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start gap-4 sm:gap-0">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900">ホーム (v3.0 Fixed)</h2>
+          <h2 className="text-2xl font-bold text-slate-900">ホーム</h2>
           <p className="text-slate-500 mt-1 text-sm sm:text-base">議事録作成ステータス、Notion同期状況を確認できます。</p>
         </div>
         <div className="flex items-center gap-4 w-full sm:w-auto">
