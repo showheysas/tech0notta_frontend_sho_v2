@@ -1,8 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Use standalone for Azure App Service (supports dynamic routes)
-  output: "standalone",
+  // Vercel automatically handles deployment, no output config needed
   reactStrictMode: true,
   
   // Headers for security and CORS
