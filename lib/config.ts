@@ -1,8 +1,4 @@
 // API Configuration
-// Hardcoded for Azure deployment
+// Use environment variable or fallback to localhost for development
 
-const isProduction = typeof window !== 'undefined' && window.location.hostname.includes('azurewebsites.net');
-
-export const API_URL = isProduction 
-  ? 'https://app-002-tech0notta-backend-dev.azurewebsites.net'
-  : (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000');
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';

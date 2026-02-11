@@ -2,19 +2,13 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { Sparkles, X, Plus, Edit2, CloudUpload, ArrowLeft, Send, Bot, User, RefreshCw, AlertCircle, FileText, CheckCircle2, ExternalLink } from 'lucide-react';
+import { Sparkles, X, Plus, Edit2, CloudUpload, ArrowLeft, Send, Bot, User, RefreshCw, AlertCircle, FileText, CheckCircle2, ExternalLink, Loader2 } from 'lucide-react';
+import MetadataEditor from '@/components/review/MetadataEditor';
+import TaskEditor from '@/components/review/TaskEditor';
+import { JobDetail, MeetingMetadata, ExtractedTask } from '@/lib/types/meeting';
+import { extractMetadata, updateJob, approveJob } from '@/lib/api/metadata';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
-
-interface JobDetail {
-  job_id: string;
-  filename: string;
-  status: string;
-  transcription: string | null;
-  summary: string | null;
-  notion_page_url: string | null;
-  error_message: string | null;
-}
 
 interface ChatMessage {
   id: string;
@@ -31,10 +25,17 @@ export default function ReviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [summary, setSummary] = useState('');
+  const [metadata, setMetadata] = useState<MeetingMetadata>({
+    participants: [],
+    key_stakeholders: [],
+  });
+  const [extractedTasks, setExtractedTasks] = useState<ExtractedTask[]>([]);
   const [tags, setTags] = useState<string[]>(['議事録', '会議']);
   const [syncing, setSyncing] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
-  const [activeTab, setActiveTab] = useState<'transcription' | 'summary'>('summary');
+  const [extracting, setExtracting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [activeTab, setActiveTab] = useState<'transcription' | 'summary' | 'metadata' | 'tasks'>('summary');
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -47,9 +48,11 @@ export default function ReviewPage() {
         setLoading(true);
         const res = await fetch(`${API_URL}/api/jobs/${jobId}`);
         if (!res.ok) throw new Error('ジョブが見つかりませんでした');
-        const data = await res.json();
+        const data: JobDetail = await res.json();
         setJob(data);
         if (data.summary) setSummary(data.summary);
+        if (data.metadata) setMetadata(data.metadata);
+        if (data.extracted_tasks) setExtractedTasks(data.extracted_tasks);
       } catch (e) {
         setError(e instanceof Error ? e.message : '不明なエラー');
       } finally {
@@ -61,7 +64,15 @@ export default function ReviewPage() {
 
   useEffect(() => {
     const createSession = async () => {
-      if (!jobId) return;
+      // jobデータが読み込まれるまで待つ
+      if (!jobId || !job || loading) return;
+      
+      // セッションが既に作成されている場合はスキップ
+      if (sessionId) return;
+      
+      // 要約が生成されていない場合は待つ
+      if (!job.summary) return;
+      
       try {
         const res = await fetch(`${API_URL}/api/chat/sessions`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -75,7 +86,7 @@ export default function ReviewPage() {
       } catch (e) { console.error('Failed to create chat session:', e); }
     };
     createSession();
-  }, [jobId]);
+  }, [jobId, job, loading, sessionId]);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
@@ -85,12 +96,17 @@ export default function ReviewPage() {
     try {
       const res = await fetch(`${API_URL}/api/summarize`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: jobId }),
+        body: JSON.stringify({ job_id: jobId, auto_extract_metadata: true }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.detail || '要約生成に失敗しました'); }
       const data = await res.json();
       setSummary(data.summary);
       setJob(prev => prev ? { ...prev, status: data.status, summary: data.summary } : null);
+      
+      // 要約完了後、自動的にメタデータ抽出を開始
+      if (data.status === 'summarized') {
+        setTimeout(() => handleExtractMetadata(), 1000);
+      }
     } catch (e) { alert(`エラー: ${e instanceof Error ? e.message : '要約生成に失敗しました'}`); }
     finally { setSummarizing(false); }
   };
@@ -102,6 +118,60 @@ export default function ReviewPage() {
       handleSummarize();
     }
   }, [job, summarizing]);
+
+  // MVP新機能: メタデータ抽出
+  const handleExtractMetadata = async () => {
+    if (!job) return;
+    setExtracting(true);
+    try {
+      const result = await extractMetadata(jobId);
+      setMetadata(result.metadata);
+      setExtractedTasks(result.extracted_tasks);
+      setJob(prev => prev ? { ...prev, status: result.status, metadata: result.metadata, extracted_tasks: result.extracted_tasks } : null);
+      setActiveTab('metadata');
+      alert(result.message);
+    } catch (e) {
+      alert(`メタデータ抽出エラー: ${e instanceof Error ? e.message : '不明なエラー'}`);
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  // 要約を再生成（メタデータ・タスク抽出は行わない）
+  const handleResummarize = async () => {
+    if (!job) return;
+    setSummarizing(true);
+    try {
+      const res = await fetch(`${API_URL}/api/summarize`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: jobId, auto_extract_metadata: false }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.detail || '要約生成に失敗しました'); }
+      const data = await res.json();
+      setSummary(data.summary);
+      setJob(prev => prev ? { ...prev, summary: data.summary } : null);
+    } catch (e) { alert(`エラー: ${e instanceof Error ? e.message : '要約生成に失敗しました'}`); }
+    finally { setSummarizing(false); }
+  };
+
+  // MVP新機能: 変更を保存
+  const handleSave = async () => {
+    if (!job) return;
+    setSaving(true);
+    try {
+      const updated = await updateJob(jobId, {
+        summary,
+        metadata,
+        extracted_tasks: extractedTasks,
+      });
+      setJob(updated);
+      alert('変更を保存しました');
+    } catch (e) {
+      alert(`保存エラー: ${e instanceof Error ? e.message : '不明なエラー'}`);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const sendMessage = async () => {
     if (!chatInput.trim() || isTyping || !sessionId) return;
@@ -116,40 +186,51 @@ export default function ReviewPage() {
       if (res.ok) {
         const data = await res.json();
         setChatMessages(prev => [...prev, { id: data.message_id, role: 'assistant', content: data.content }]);
-        if (data.content.includes('##')) setSummary(data.content);
+        // チャットリライトの結果を常にメインの要約に反映
+        setSummary(data.content);
       } else { throw new Error('送信失敗'); }
     } catch { alert('メッセージの送信に失敗しました。'); }
     finally { setIsTyping(false); }
   };
 
+  // MVP新機能: 承認
   const handleApprove = async () => {
     if (!job) return;
-    const approvedBy = prompt('承認者名を入力してください:');
-    if (!approvedBy?.trim()) return;
-    try {
-      const res = await fetch(`${API_URL}/api/approve`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: jobId, approved_by: approvedBy.trim(), comment: '' }),
-      });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.detail || '承認に失敗しました'); }
-      const data = await res.json();
-      alert(data.slack_posted ? '承認が完了し、Slackに通知しました！' : '承認は完了しましたが、Slack通知に失敗しました。');
-    } catch (e) { alert(`承認エラー: ${e instanceof Error ? e.message : '不明なエラー'}`); }
-  };
+    
+    if (!metadata.mtg_name || !metadata.meeting_date || !metadata.meeting_type) {
+      alert('必須項目（MTG名、会議日、種別）を入力してください。');
+      setActiveTab('metadata');
+      return;
+    }
 
-  const handleSync = async () => {
-    if (!job) return;
+    const confirmed = confirm('議事録を承認してNotionに投入しますか？\n\n承認後、以下の処理が実行されます：\n- Notion議事録DBに投入\n- タスクをNotion タスクDBに登録\n- Slack通知を送信');
+    if (!confirmed) return;
+
     setSyncing(true);
     try {
-      const res = await fetch(`${API_URL}/api/notion/create`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: jobId, title: job.filename }),
+      // 承認前に編集内容を保存
+      await updateJob(jobId, {
+        summary,
+        metadata,
+        extracted_tasks: extractedTasks,
       });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.detail || '同期に失敗しました'); }
-      alert('Notionへの同期が完了しました！');
+      
+      const result = await approveJob(jobId, {
+        register_tasks: true,
+        send_notifications: true,
+      });
+      alert(result.message);
+      
+      // ステータスを更新
+      setJob(prev => prev ? { ...prev, status: 'creating_notion' } : null);
+      
+      // ホーム画面（会議履歴）に遷移
       router.push('/');
-    } catch (e) { alert(`同期エラー: ${e instanceof Error ? e.message : '不明なエラー'}`); }
-    finally { setSyncing(false); }
+    } catch (e) {
+      alert(`承認エラー: ${e instanceof Error ? e.message : '不明なエラー'}`);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const removeTag = (t: string) => setTags(tags.filter(tag => tag !== t));
@@ -169,6 +250,9 @@ export default function ReviewPage() {
   );
 
   const needsSummarization = job.status === 'transcribed' && !job.summary;
+  const needsMetadataExtraction = job.status === 'summarized' && !job.metadata;
+  const isReviewing = job.status === 'reviewing';
+  const isCompleted = job.status === 'completed';
 
   return (
     <div className="flex-1 flex flex-col h-screen overflow-hidden bg-white animate-slide-in-from-right">
@@ -182,39 +266,63 @@ export default function ReviewPage() {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <div className="p-1.5 bg-blue-50 rounded-lg text-blue-600 shrink-0"><Sparkles size={18} /></div>
-              <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight truncate">レビュー & Notion同期</h2>
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight truncate">議事録確認・修正</h2>
             </div>
             <p className="text-slate-500 text-xs sm:text-sm pl-0 sm:pl-10 mt-1 truncate">
               会議: <span className="font-medium text-slate-900">{job.filename}</span>
             </p>
           </div>
         </div>
-        <div className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600 ring-1 ring-inset ring-slate-200 ml-10 sm:ml-0">
-          ステータス: {job.status}
+        <div className="flex items-center gap-2">
+          <div className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600 ring-1 ring-inset ring-slate-200">
+            {job.status}
+          </div>
+          {isReviewing && (
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              {saving ? <><Loader2 size={14} className="inline animate-spin mr-1" /> 保存中...</> : '変更を保存'}
+            </button>
+          )}
         </div>
       </div>
 
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
-        {/* Left column: Transcription/Summary */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 border-b lg:border-b-0 lg:border-r border-slate-100 order-2 lg:order-1 h-full">
+        {/* Left column: Content - スクロール可能 */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-8 border-b lg:border-b-0 lg:border-r border-slate-100 order-2 lg:order-1">
           <div className="max-w-3xl mx-auto flex flex-col gap-6 sm:gap-8 pb-10">
-            {job.transcription && (
-              <div className="flex gap-2 border-b border-slate-200">
-                <button onClick={() => setActiveTab('summary')} className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === 'summary' ? 'text-blue-600 border-blue-600' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
-                  <Sparkles size={16} /> 要約
-                </button>
-                <button onClick={() => setActiveTab('transcription')} className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${activeTab === 'transcription' ? 'text-blue-600 border-blue-600' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
+            {/* Tabs */}
+            <div className="flex gap-2 border-b border-slate-200 overflow-x-auto">
+              <button onClick={() => setActiveTab('summary')} className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'summary' ? 'text-blue-600 border-blue-600' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
+                <Sparkles size={16} /> 要約
+              </button>
+              {job.transcription && (
+                <button onClick={() => setActiveTab('transcription')} className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'transcription' ? 'text-blue-600 border-blue-600' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
                   <FileText size={16} /> 文字起こし
                 </button>
-              </div>
-            )}
+              )}
+              {(job.metadata || isReviewing) && (
+                <button onClick={() => setActiveTab('metadata')} className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'metadata' ? 'text-blue-600 border-blue-600' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
+                  <Edit2 size={16} /> メタデータ
+                </button>
+              )}
+              {(job.extracted_tasks || isReviewing) && (
+                <button onClick={() => setActiveTab('tasks')} className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap ${activeTab === 'tasks' ? 'text-blue-600 border-blue-600' : 'text-slate-500 border-transparent hover:text-slate-700'}`}>
+                  <CheckCircle2 size={16} /> タスク ({extractedTasks.length})
+                </button>
+              )}
+            </div>
 
+            {/* Transcription Tab */}
             {activeTab === 'transcription' && job.transcription && (
               <div className="w-full p-4 sm:p-6 rounded-xl bg-slate-50 border border-slate-200 max-h-[400px] overflow-y-auto">
                 <p className="text-sm leading-relaxed text-slate-700 whitespace-pre-wrap">{job.transcription}</p>
               </div>
             )}
 
+            {/* Summary Tab */}
             {activeTab === 'summary' && (
               <>
                 {needsSummarization && (
@@ -226,51 +334,74 @@ export default function ReviewPage() {
                   </div>
                 )}
 
+                {needsMetadataExtraction && !extracting && (
+                  <div className="flex flex-col gap-3 p-6 rounded-xl bg-emerald-50 border border-emerald-200">
+                    <p className="text-sm text-emerald-800">要約が完了しました。メタデータとタスクを抽出しています...</p>
+                  </div>
+                )}
+
+                {extracting && (
+                  <div className="flex flex-col gap-3 p-6 rounded-xl bg-emerald-50 border border-emerald-200">
+                    <p className="text-sm text-emerald-800">要約が完了しました。メタデータとタスクを抽出しています...</p>
+                    <div className="w-full py-3 px-4 bg-emerald-600 text-white font-bold rounded-xl flex items-center justify-center gap-2">
+                      <RefreshCw className="animate-spin" size={18} /> 抽出中...
+                    </div>
+                  </div>
+                )}
+
                 {(job.summary || summary) && (
                   <div className="flex flex-col gap-3">
                     <label className="text-xs font-bold text-slate-400 uppercase tracking-wider flex justify-between items-end">
                       エグゼクティブサマリー
-                      <span className="text-[10px] normal-case font-normal text-slate-400">{job.status === 'completed' ? '閲覧・編集可能' : 'クリックして編集'}</span>
+                      <span className="text-[10px] normal-case font-normal text-slate-400">{isCompleted ? '閲覧のみ' : 'クリックして編集'}</span>
                     </label>
                     <div className="w-full p-4 sm:p-6 rounded-xl bg-slate-50 border border-slate-200 hover:border-blue-300 hover:bg-white focus-within:ring-2 focus-within:ring-blue-100 focus-within:border-blue-500 transition-all">
-                      <textarea value={summary} onChange={(e) => setSummary(e.target.value)} className="w-full bg-transparent border-0 p-0 text-sm sm:text-base leading-relaxed text-slate-800 placeholder:text-slate-400 focus:ring-0 resize-none h-[200px] sm:h-[240px] focus:outline-none" spellCheck={false} />
+                      <textarea 
+                        value={summary} 
+                        onChange={(e) => setSummary(e.target.value)} 
+                        disabled={isCompleted}
+                        className="w-full bg-transparent border-0 p-0 text-sm sm:text-base leading-relaxed text-slate-800 placeholder:text-slate-400 focus:ring-0 resize-none h-[200px] sm:h-[240px] focus:outline-none disabled:opacity-70" 
+                        spellCheck={false} 
+                      />
                     </div>
-                  </div>
-                )}
-
-                {(job.summary || summary) && (
-                  <div className="flex flex-col gap-3">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">主要インサイト</label>
-                    <div className="flex flex-wrap gap-2">
-                      {tags.map(tag => (
-                        <div key={tag} className="group flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-lg bg-white border border-slate-200 text-sm font-medium text-slate-700 shadow-sm hover:border-blue-300 hover:shadow-md transition-all cursor-default">
-                          {tag}
-                          <button onClick={() => removeTag(tag)} className="text-slate-400 hover:text-red-500 rounded-full p-0.5 hover:bg-red-50 transition-colors"><X size={14} /></button>
-                        </div>
-                      ))}
-                      <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-dashed border-slate-300 text-sm font-medium text-slate-500 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50 transition-all">
-                        <Plus size={16} /> タグ追加
+                    {!isCompleted && (
+                      <button 
+                        onClick={handleResummarize} 
+                        disabled={summarizing}
+                        className="self-start px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 flex items-center gap-2"
+                      >
+                        {summarizing ? <><RefreshCw className="animate-spin" size={14} /> 再生成中...</> : <><RefreshCw size={14} /> 要約を再生成</>}
                       </button>
-                    </div>
+                    )}
                   </div>
                 )}
               </>
             )}
+
+            {/* Metadata Tab */}
+            {activeTab === 'metadata' && (
+              <MetadataEditor metadata={metadata} onChange={setMetadata} />
+            )}
+
+            {/* Tasks Tab */}
+            {activeTab === 'tasks' && (
+              <TaskEditor tasks={extractedTasks} onChange={setExtractedTasks} />
+            )}
           </div>
         </div>
 
-        {/* Right column: AI Chat & Sync */}
-        <div className="w-full lg:w-96 bg-slate-50 flex flex-col shrink-0 order-1 lg:order-2 border-b lg:border-b-0 lg:border-l border-slate-200 lg:h-full max-h-[50vh] lg:max-h-none overflow-hidden">
-          <div className="p-4 sm:p-8 flex flex-col h-full gap-6 sm:gap-8 overflow-y-auto">
+        {/* Right column: AI Chat & Actions - 画面に固定 */}
+        <div className="w-full lg:w-96 bg-slate-50 flex flex-col shrink-0 order-1 lg:order-2 border-b lg:border-b-0 lg:border-l border-slate-200 max-h-[50vh] lg:max-h-full overflow-hidden">
+          <div className="p-4 sm:p-6 flex flex-col flex-1 gap-4 sm:gap-6 overflow-hidden min-h-0">
             {/* AI Chat */}
-            <div className="flex-1 flex flex-col min-h-0">
+            <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
               <div className="flex items-center justify-between mb-4">
-                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">AI修正アシスタント</label>
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">AI要約修正アシスタント</label>
                 <div className="flex items-center gap-1.5 text-emerald-600">
                   <Bot size={14} /><span className="text-[10px] font-medium">オンライン</span>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto bg-white rounded-xl border border-slate-200 p-3 mb-3 min-h-[200px] max-h-[300px]">
+              <div className="flex-1 overflow-y-auto bg-white rounded-xl border border-slate-200 p-3 mb-3 min-h-[150px]">
                 <div className="flex flex-col gap-3">
                   {chatMessages.map((msg) => (
                     <div key={msg.id} className={`flex gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
@@ -304,48 +435,30 @@ export default function ReviewPage() {
                 </button>
               </div>
             </div>
-
-            {/* Sync area */}
-            {(job.status === 'summarized' || job.status === 'completed' || summary) && (
-              <div className="mt-auto pt-6 border-t border-slate-200">
-                <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">同期先</label>
-                <div className="flex items-center gap-3 p-3.5 rounded-xl bg-white border border-slate-200 mb-6 shadow-sm">
-                  <div className="w-8 h-8 rounded bg-white flex items-center justify-center shrink-0 border border-slate-200">
-                    <span className="text-sm font-bold font-serif">N</span>
-                  </div>
-                  <div className="flex flex-col min-w-0">
-                    <span className="text-[10px] text-slate-500 font-medium leading-none mb-1">Notionデータベース</span>
-                    <span className="text-sm font-bold text-slate-900 truncate leading-none">TechNotta DB</span>
-                  </div>
-                  <button className="ml-auto text-slate-400 hover:text-blue-600 transition-colors p-1 rounded-full hover:bg-slate-100"><Edit2 size={16} /></button>
-                </div>
-
-                {job.status === 'completed' && job.notion_page_url ? (
-                  <>
-                    <div className="mb-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-2">
-                      <CheckCircle2 size={16} className="text-emerald-600" />
-                      <span className="text-sm text-emerald-800 font-medium">Notion同期済み</span>
-                    </div>
-                    <a href={job.notion_page_url} target="_blank" rel="noopener noreferrer" className="w-full py-3.5 sm:py-4 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5 mb-3">
-                      <ExternalLink size={20} /> Notionで表示
-                    </a>
-                    <button onClick={handleSync} disabled={syncing} className="w-full py-3.5 sm:py-4 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold rounded-xl shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5">
-                      {syncing ? <><span className="animate-spin">⟳</span> 更新中...</> : <><Edit2 size={20} /> 修正をNotionに反映</>}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button onClick={handleApprove} className="w-full py-3.5 sm:py-4 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5 mb-3">
-                      <CheckCircle2 size={20} /> 承認してSlack通知
-                    </button>
-                    <button onClick={handleSync} disabled={syncing} className="w-full py-3.5 sm:py-4 px-4 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-bold rounded-xl shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5">
-                      {syncing ? <><span className="animate-spin">⟳</span> 同期中...</> : <><CloudUpload size={20} /> Notionに同期</>}
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
           </div>
+
+          {/* Actions - 固定位置 */}
+          {(isReviewing || isCompleted) && (
+            <div className="flex-none p-4 sm:p-6 pt-0 sm:pt-0 border-t border-slate-200 bg-slate-50">
+              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">アクション</label>
+
+              {isCompleted && job.notion_page_url ? (
+                <>
+                  <div className="mb-3 p-3 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-2">
+                    <CheckCircle2 size={16} className="text-emerald-600" />
+                    <span className="text-sm text-emerald-800 font-medium">Notion同期済み</span>
+                  </div>
+                  <a href={job.notion_page_url} target="_blank" rel="noopener noreferrer" className="w-full py-3.5 sm:py-4 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5">
+                    <ExternalLink size={20} /> Notionで表示
+                  </a>
+                </>
+              ) : (
+                <button onClick={handleApprove} disabled={syncing} className="w-full py-3.5 sm:py-4 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all hover:-translate-y-0.5">
+                  {syncing ? <><Loader2 className="animate-spin" size={20} /> 処理中...</> : <><CheckCircle2 size={20} /> 承認してNotion投入</>}
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

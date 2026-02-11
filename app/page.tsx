@@ -8,7 +8,7 @@ import { MeetingStatus } from '@/lib/types/meeting';
 import { format } from 'date-fns';
 import { ja } from 'date-fns/locale';
 
-import { API_URL } from '@/lib/config';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
 interface Job {
   id: number;
@@ -18,17 +18,25 @@ interface Job {
   created_at: string;
   updated_at: string;
   notion_page_url?: string;
+  metadata?: {
+    mtg_name?: string;
+    meeting_date?: string;
+    meeting_type?: string;
+  };
 }
 
 interface JobStats {
   total_meetings: number;
   pending_approval: number;
   synced_notion: number;
+  reviewing: number; // MVP新機能: 確認・修正中
 }
 
 function getBadgeStatus(status: string): MeetingStatus {
   switch (status) {
     case 'completed': return MeetingStatus.SYNCED;
+    case 'reviewing': return MeetingStatus.PENDING; // MVP新機能
+    case 'extracting_metadata': return MeetingStatus.PROCESSING; // MVP新機能
     case 'summarized':
     case 'transcribed': return MeetingStatus.PENDING;
     case 'uploading':
@@ -64,7 +72,7 @@ function getBadgeClass(status: MeetingStatus): string {
 
 export default function HomePage() {
   const [jobs, setJobs] = useState<Job[]>([]);
-  const [stats, setStats] = useState<JobStats>({ total_meetings: 0, pending_approval: 0, synced_notion: 0 });
+  const [stats, setStats] = useState<JobStats>({ total_meetings: 0, pending_approval: 0, synced_notion: 0, reviewing: 0 });
 
   // 処理中のジョブを自動的に進める
   const processJobs = useCallback(async (jobList: Job[]) => {
@@ -134,7 +142,7 @@ export default function HomePage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div className="flex items-center gap-3 mb-2">
             <div className="p-2 rounded-lg bg-slate-100 text-slate-600"><Users size={20} /></div>
@@ -144,8 +152,15 @@ export default function HomePage() {
         </div>
         <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
           <div className="flex items-center gap-3 mb-2">
+            <div className="p-2 rounded-lg bg-amber-50 text-amber-600"><Edit3 size={20} /></div>
+            <span className="text-sm font-medium text-slate-500">確認・修正中</span>
+          </div>
+          <p className="text-3xl font-bold text-amber-600">{stats.reviewing}</p>
+        </div>
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
+          <div className="flex items-center gap-3 mb-2">
             <div className="p-2 rounded-lg bg-blue-50 text-blue-600"><FileCheck size={20} /></div>
-            <span className="text-sm font-medium text-slate-500">議事録 承認待ち</span>
+            <span className="text-sm font-medium text-slate-500">承認待ち</span>
           </div>
           <p className="text-3xl font-bold text-blue-600">{stats.pending_approval}</p>
         </div>
@@ -180,7 +195,7 @@ export default function HomePage() {
                 return (
                   <tr key={job.job_id} className="group hover:bg-slate-50 transition-colors">
                     <td className="px-6 py-4 font-medium text-slate-900">
-                      <span>{job.filename}</span>
+                      <span>{job.metadata?.mtg_name || job.filename}</span>
                     </td>
                     <td className="px-6 py-4 text-slate-500">
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
