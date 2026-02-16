@@ -60,6 +60,7 @@ export interface MeetingMetadata {
   meeting_date?: string;
   meeting_type?: string;
   project?: string;
+  project_id?: string;  // Notion案件ページID
   key_stakeholders: string[];
   key_team?: string;
   search_keywords?: string;

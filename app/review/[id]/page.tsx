@@ -218,6 +218,7 @@ export default function ReviewPage() {
       const result = await approveJob(jobId, {
         register_tasks: true,
         send_notifications: true,
+        project_id: metadata.project_id,
       });
       alert(result.message);
       
@@ -360,7 +361,7 @@ export default function ReviewPage() {
                         value={summary} 
                         onChange={(e) => setSummary(e.target.value)} 
                         disabled={isCompleted}
-                        className="w-full bg-transparent border-0 p-0 text-sm sm:text-base leading-relaxed text-slate-800 placeholder:text-slate-400 focus:ring-0 resize-none h-[200px] sm:h-[240px] focus:outline-none disabled:opacity-70" 
+                        className="w-full bg-transparent border-0 p-0 text-sm sm:text-base leading-relaxed text-slate-800 placeholder:text-slate-400 focus:ring-0 resize-none h-[400px] sm:h-[500px] focus:outline-none disabled:opacity-70" 
                         spellCheck={false} 
                       />
                     </div>
