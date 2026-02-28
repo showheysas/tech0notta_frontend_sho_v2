@@ -6,12 +6,38 @@ import { ArrowRight, Check, Lock, Hourglass, AlertCircle, X } from 'lucide-react
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
+type Platform = 'zoom' | 'meet' | 'teams' | null;
+
+const detectPlatform = (url: string): Platform => {
+  if (url.includes('zoom.us')) return 'zoom';
+  if (url.includes('meet.google.com')) return 'meet';
+  if (url.includes('teams.microsoft.com') || url.includes('teams.live.com')) return 'teams';
+  return null;
+};
+
+const PLATFORM_BADGE: Record<NonNullable<Platform>, { label: string; className: string }> = {
+  zoom: {
+    label: 'Zoom',
+    className: 'bg-blue-100 text-blue-700 border border-blue-200',
+  },
+  meet: {
+    label: 'Google Meet',
+    className: 'bg-green-100 text-green-700 border border-green-200',
+  },
+  teams: {
+    label: 'Microsoft Teams',
+    className: 'bg-purple-100 text-purple-700 border border-purple-200',
+  },
+};
+
 export default function JoinPage() {
   const router = useRouter();
   const [url, setUrl] = useState('');
   const [step, setStep] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const platform = detectPlatform(url);
 
   const handleJoin = async () => {
     if (!url) return;
@@ -21,7 +47,7 @@ export default function JoinPage() {
       const response = await fetch(`${API_URL}/api/bot/dispatch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meeting_id: url }),
+        body: JSON.stringify({ meeting_id: url, meeting_url: url }),
       });
 
       if (!response.ok) {
@@ -82,10 +108,10 @@ export default function JoinPage() {
             <div className="flex-1">
               <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight mb-2">ボットを会議に参加させる</h2>
               <p className="text-slate-500 text-sm sm:text-lg">
-                Zoom 会議の招待URLを貼り付けると、Tech Botが自動入室して会議の音声を録音・リアルタイムで文字起こしします。
+                Zoom・Google Meet・Teams の招待URLを貼り付けると、Tech Botが自動入室して会議の音声を録音・リアルタイムで文字起こしします。
                 <br className="hidden sm:inline" />
                 <span className="text-slate-400 text-base block mt-2">
-                  ※ 基本的にボットは自動で参加しますが、参加しなかった場合の予備機能としてご利用ください。
+                  ※ Zoomは基本的にボットが自動で参加しますが、参加しなかった場合の予備機能としてもご利用いただけます。
                 </span>
               </p>
             </div>
@@ -103,14 +129,14 @@ export default function JoinPage() {
           )}
 
           {/* Input */}
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             <label htmlFor="meeting-url" className="text-slate-900 text-sm font-bold uppercase tracking-wider">Web会議の招待URLを入力</label>
             <div className="flex flex-col sm:flex-row items-stretch shadow-sm rounded-xl gap-3 sm:gap-0 h-auto sm:h-16 w-full">
               <input
                 id="meeting-url"
                 type="text"
                 autoFocus
-                placeholder="https://zoom.us/j/123456789..."
+                placeholder="https://zoom.us/j/... または https://meet.google.com/... または Teams URL"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 disabled={step > 0}
@@ -126,6 +152,16 @@ export default function JoinPage() {
                 ) : '接続中...'}
               </button>
             </div>
+
+            {/* Platform badge */}
+            {platform && (
+              <div className="flex items-center gap-2">
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold ${PLATFORM_BADGE[platform].className}`}>
+                  {PLATFORM_BADGE[platform].label}
+                </span>
+                <span className="text-slate-400 text-xs">として参加します</span>
+              </div>
+            )}
           </div>
 
           {/* Stepper */}
