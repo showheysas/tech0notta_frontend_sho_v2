@@ -94,10 +94,10 @@ export default function JoinPage() {
 
   useEffect(() => {
     if (step === 3) {
-      const timer = setTimeout(() => router.push('/'), 1500);
+      const timer = setTimeout(() => router.push(`/live/${sessionId}`), 1500);
       return () => clearTimeout(timer);
     }
-  }, [step, router]);
+  }, [step, router, sessionId]);
 
   return (
     <div className="flex-1 flex items-center justify-center p-8 bg-slate-50/50 min-h-screen animate-fade-in">
