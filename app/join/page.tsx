@@ -42,6 +42,7 @@ export default function JoinPage() {
   const handleJoin = async () => {
     if (!url) return;
     setError(null);
+    setStep(1); // 即座にステップ1へ（ローディング表示）
 
     try {
       const response = await fetch(`${API_URL}/api/bot/dispatch`, {
@@ -57,7 +58,6 @@ export default function JoinPage() {
 
       const data = await response.json();
       setSessionId(data.session.id);
-      setStep(1);
     } catch (err) {
       console.error(err);
       setError(err instanceof Error ? err.message : '予期せぬエラーが発生しました');
