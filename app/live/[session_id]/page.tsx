@@ -32,6 +32,8 @@ export default function LivePage() {
   const lastSegmentIdRef = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const startTimeRef = useRef<number>(Date.now());
+  // stale closure を防ぐため useRef で終了フラグを管理
+  const isEndingRef = useRef(false);
 
   // 経過時間タイマー
   useEffect(() => {
@@ -107,7 +109,8 @@ export default function LivePage() {
   }, [segments]);
 
   const handleEnd = useCallback(async () => {
-    if (isEnding) return;
+    if (isEndingRef.current) return;
+    isEndingRef.current = true;  // Ref は即時更新されるため stale closure の影響を受けない
     setIsEnding(true);
 
     try {
