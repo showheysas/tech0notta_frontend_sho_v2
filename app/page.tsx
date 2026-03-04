@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { Users, FileCheck, CheckCircle2, Edit3, ExternalLink, RefreshCw, Star, MoreVertical, Video } from 'lucide-react';
 import UploadButton from '@/components/upload/UploadButton';
 import { MeetingStatus } from '@/lib/types/meeting';
-import { format } from 'date-fns';
-import { ja } from 'date-fns/locale';
+import { formatDateJST } from '@/lib/dateUtils';
+import { fetchWithAuth } from '@/lib/api/client';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '';
 
@@ -100,7 +100,7 @@ export default function HomePage() {
     try {
       const [jobsRes, statsRes] = await Promise.all([
         fetch(`${API_URL}/api/jobs?limit=10`),
-        fetch(`${API_URL}/api/jobs/stats`)
+        fetchWithAuth('/api/jobs/stats')
       ]);
       if (jobsRes.ok) {
         const jobList = await jobsRes.json();
@@ -205,11 +205,7 @@ export default function HomePage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-slate-500 text-sm">
-                      {(() => {
-                        const dateStr = job.created_at;
-                        const date = new Date(dateStr.endsWith('Z') || dateStr.includes('+') ? dateStr : `${dateStr}Z`);
-                        return format(date, 'yyyy年MM月dd日 HH:mm', { locale: ja });
-                      })()}
+                      {formatDateJST(job.created_at)}
                     </td>
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getBadgeClass(status)}`}>
