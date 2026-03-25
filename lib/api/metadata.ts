@@ -1,4 +1,4 @@
-import { API_URL } from '../config';
+import { fetchWithAuth } from './client';
 import { JobDetail, MeetingMetadata, ExtractedTask } from '../types/meeting';
 
 /**
@@ -12,16 +12,9 @@ export async function extractMetadata(jobId: string): Promise<{
   extracted_tasks: ExtractedTask[];
   message: string;
 }> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}/extract-metadata`, {
+  const res = await fetchWithAuth(`/api/jobs/${jobId}/extract-metadata`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
   });
-  
-  if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.detail || 'メタデータ抽出に失敗しました');
-  }
-  
   return res.json();
 }
 
@@ -37,17 +30,10 @@ export async function updateJob(
     extracted_tasks?: ExtractedTask[];
   }
 ): Promise<JobDetail> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}`, {
+  const res = await fetchWithAuth(`/api/jobs/${jobId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  
-  if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.detail || 'Job更新に失敗しました');
-  }
-  
   return res.json();
 }
 
@@ -70,20 +56,13 @@ export async function approveJob(
   notifications_sent: number;
   message: string;
 }> {
-  const res = await fetch(`${API_URL}/api/jobs/${jobId}/approve`, {
+  const res = await fetchWithAuth(`/api/jobs/${jobId}/approve`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       register_tasks: options.register_tasks ?? true,
       send_notifications: options.send_notifications ?? true,
       project_id: options.project_id,
     }),
   });
-  
-  if (!res.ok) {
-    const error = await res.json();
-    throw new Error(error.detail || '承認に失敗しました');
-  }
-  
   return res.json();
 }

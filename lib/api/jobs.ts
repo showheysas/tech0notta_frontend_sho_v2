@@ -1,5 +1,6 @@
 import { Meeting, MeetingStatus } from '../types/meeting';
 import { API_URL } from '../config';
+import { fetchWithAuth } from './client';
 
 /** Terminal statuses that stop polling */
 const TERMINAL_STATUSES: MeetingStatus[] = [
@@ -28,6 +29,22 @@ export async function getJobs(): Promise<Meeting[]> {
   const res = await fetch(`${API_URL}/api/jobs`);
   if (!res.ok) {
     throw new Error('ジョブ一覧の取得に失敗しました');
+  }
+  return res.json();
+}
+
+/**
+ * Fetch job stats (requires authentication).
+ */
+export async function getJobStats(): Promise<{
+  total_meetings: number;
+  pending_approval: number;
+  synced_notion: number;
+  reviewing: number;
+}> {
+  const res = await fetchWithAuth('/api/jobs/stats');
+  if (!res.ok) {
+    throw new Error('ジョブ統計情報の取得に失敗しました');
   }
   return res.json();
 }
